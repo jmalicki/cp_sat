@@ -187,6 +187,67 @@ impl CpModelBuilder {
         self.proto.constraints[constraint.0].name = name.into();
     }
 
+    /// Sets enforcement literals on a constraint. The constraint will only
+    /// be enforced when ALL the given literals are true.
+    ///
+    /// This is also called "half-reification". When the enforcement literals
+    /// are false, the constraint is simply ignored.
+    ///
+    /// Note: Only bool_or, bool_and, and linear constraints fully support
+    /// enforcement literals.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use cp_sat::builder::CpModelBuilder;
+    /// # use cp_sat::proto::CpSolverStatus;
+    /// let mut model = CpModelBuilder::default();
+    /// let x = model.new_bool_var();
+    /// let y = model.new_bool_var();
+    /// let z = model.new_bool_var();
+    /// // z must be true, but only if x is true
+    /// let cst = model.add_and([z]);
+    /// model.only_enforce_if(cst, [x]);
+    /// // force x to be false, so z can be anything
+    /// model.add_and([!x, !y]);
+    /// let response = model.solve();
+    /// assert_eq!(response.status(), CpSolverStatus::Optimal);
+    /// assert!(!x.solution_value(&response));
+    /// // z is unconstrained since x is false
+    /// ```
+    pub fn only_enforce_if(
+        &mut self,
+        constraint: Constraint,
+        literals: impl IntoIterator<Item = BoolVar>,
+    ) {
+        self.proto.constraints[constraint.0]
+            .enforcement_literal
+            .extend(literals.into_iter().map(|v| v.0));
+    }
+
+    /// Adds an implication constraint: if `a` is true, then `b` must be true.
+    ///
+    /// This is equivalent to `add_or([!a, b])`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use cp_sat::builder::CpModelBuilder;
+    /// # use cp_sat::proto::CpSolverStatus;
+    /// let mut model = CpModelBuilder::default();
+    /// let a = model.new_bool_var();
+    /// let b = model.new_bool_var();
+    /// model.add_implication(a, b); // a => b
+    /// model.add_and([a]); // force a to be true
+    /// let response = model.solve();
+    /// assert_eq!(response.status(), CpSolverStatus::Optimal);
+    /// assert!(a.solution_value(&response));
+    /// assert!(b.solution_value(&response)); // b must be true since a is true
+    /// ```
+    pub fn add_implication(&mut self, a: BoolVar, b: BoolVar) -> Constraint {
+        self.add_or([!a, b])
+    }
+
     /// Adds a boolean OR constraint on a list of [BoolVar].
     ///
     /// # Example
@@ -838,6 +899,13 @@ impl std::fmt::Debug for BoolVar {
     }
 }
 
+impl std::ops::Mul<i64> for BoolVar {
+    type Output = LinearExpr;
+    fn mul(self, rhs: i64) -> Self::Output {
+        LinearExpr::from((rhs, self))
+    }
+}
+
 /// Integer variable identifier.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IntVar(i32);
@@ -1009,6 +1077,17 @@ impl<T: Into<LinearExpr>> std::ops::Sub<T> for LinearExpr {
     type Output = LinearExpr;
     fn sub(mut self, rhs: T) -> Self::Output {
         self -= rhs.into();
+        self
+    }
+}
+
+impl std::ops::Mul<i64> for LinearExpr {
+    type Output = LinearExpr;
+    fn mul(mut self, rhs: i64) -> Self::Output {
+        for c in &mut self.coeffs {
+            *c *= rhs;
+        }
+        self.constant *= rhs;
         self
     }
 }
