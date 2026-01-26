@@ -660,6 +660,223 @@ impl CpModelBuilder {
             exprs: exprs.into_iter().map(|e| e.into().into()).collect(),
         }))
     }
+    /// Creates an interval variable with variable start, size, and end.
+    ///
+    /// The solver enforces: start + size == end.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use cp_sat::builder::CpModelBuilder;
+    /// # use cp_sat::proto::CpSolverStatus;
+    /// let mut model = CpModelBuilder::default();
+    /// let start = model.new_int_var([(0, 10)]);
+    /// let size = model.new_int_var([(2, 5)]);
+    /// let end = model.new_int_var([(0, 15)]);
+    /// let interval = model.new_interval_var(start, size, end);
+    /// let response = model.solve();
+    /// assert_eq!(response.status(), CpSolverStatus::Optimal);
+    /// // Verify start + size == end
+    /// let s = start.solution_value(&response);
+    /// let sz = size.solution_value(&response);
+    /// let e = end.solution_value(&response);
+    /// assert_eq!(s + sz, e);
+    /// ```
+    pub fn new_interval_var(
+        &mut self,
+        start: impl Into<LinearExpr>,
+        size: impl Into<LinearExpr>,
+        end: impl Into<LinearExpr>,
+    ) -> IntervalVar {
+        let start_expr: LinearExpr = start.into();
+        let size_expr: LinearExpr = size.into();
+        let end_expr: LinearExpr = end.into();
+
+        // Add constraint: start + size == end
+        self.add_eq(start_expr.clone() + size_expr.clone(), end_expr.clone());
+
+        let index = self.proto.constraints.len() as i32;
+        self.proto.constraints.push(proto::ConstraintProto {
+            constraint: Some(CstEnum::Interval(proto::IntervalConstraintProto {
+                start: Some(start_expr.into()),
+                end: Some(end_expr.into()),
+                size: Some(size_expr.into()),
+            })),
+            ..Default::default()
+        });
+        IntervalVar(index)
+    }
+
+    /// Creates a fixed-size interval variable.
+    ///
+    /// This is a convenience method that creates an interval with a constant size.
+    /// The solver enforces: start + size == end.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use cp_sat::builder::CpModelBuilder;
+    /// # use cp_sat::proto::CpSolverStatus;
+    /// let mut model = CpModelBuilder::default();
+    /// let start = model.new_int_var([(0, 10)]);
+    /// let interval = model.new_fixed_size_interval_var(start, 3);
+    /// let response = model.solve();
+    /// assert_eq!(response.status(), CpSolverStatus::Optimal);
+    /// ```
+    pub fn new_fixed_size_interval_var(
+        &mut self,
+        start: impl Into<LinearExpr>,
+        size: i64,
+    ) -> IntervalVar {
+        let start_expr: LinearExpr = start.into();
+        let size_expr = LinearExpr::from(size);
+        let end_expr = start_expr.clone() + size;
+        self.new_interval_var(start_expr, size_expr, end_expr)
+    }
+
+    /// Creates an optional interval variable (present only when literal is true).
+    ///
+    /// When the enforcement literal is false, the interval is ignored by
+    /// scheduling constraints.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use cp_sat::builder::CpModelBuilder;
+    /// # use cp_sat::proto::CpSolverStatus;
+    /// let mut model = CpModelBuilder::default();
+    /// let start = model.new_int_var([(0, 10)]);
+    /// let size = model.new_int_var([(2, 5)]);
+    /// let end = model.new_int_var([(0, 15)]);
+    /// let is_present = model.new_bool_var();
+    /// let interval = model.new_optional_interval_var(start, size, end, is_present);
+    /// let response = model.solve();
+    /// assert_eq!(response.status(), CpSolverStatus::Optimal);
+    /// ```
+    pub fn new_optional_interval_var(
+        &mut self,
+        start: impl Into<LinearExpr>,
+        size: impl Into<LinearExpr>,
+        end: impl Into<LinearExpr>,
+        is_present: impl Into<BoolVar>,
+    ) -> IntervalVar {
+        let start_expr: LinearExpr = start.into();
+        let size_expr: LinearExpr = size.into();
+        let end_expr: LinearExpr = end.into();
+        let literal = is_present.into();
+
+        // Add constraint: start + size == end (only enforced when is_present is true)
+        let eq_constraint = self.add_eq(start_expr.clone() + size_expr.clone(), end_expr.clone());
+        self.only_enforce_if(eq_constraint, [literal]);
+
+        let index = self.proto.constraints.len() as i32;
+        self.proto.constraints.push(proto::ConstraintProto {
+            enforcement_literal: vec![literal.0],
+            constraint: Some(CstEnum::Interval(proto::IntervalConstraintProto {
+                start: Some(start_expr.into()),
+                end: Some(end_expr.into()),
+                size: Some(size_expr.into()),
+            })),
+            ..Default::default()
+        });
+        IntervalVar(index)
+    }
+
+    /// Creates an optional fixed-size interval variable.
+    ///
+    /// This is a convenience method that creates an optional interval with a constant size.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use cp_sat::builder::CpModelBuilder;
+    /// # use cp_sat::proto::CpSolverStatus;
+    /// let mut model = CpModelBuilder::default();
+    /// let start = model.new_int_var([(0, 10)]);
+    /// let is_present = model.new_bool_var();
+    /// let interval = model.new_optional_fixed_size_interval_var(start, 3, is_present);
+    /// let response = model.solve();
+    /// assert_eq!(response.status(), CpSolverStatus::Optimal);
+    /// ```
+    pub fn new_optional_fixed_size_interval_var(
+        &mut self,
+        start: impl Into<LinearExpr>,
+        size: i64,
+        is_present: impl Into<BoolVar>,
+    ) -> IntervalVar {
+        let start_expr: LinearExpr = start.into();
+        let size_expr = LinearExpr::from(size);
+        let end_expr = start_expr.clone() + size;
+        self.new_optional_interval_var(start_expr, size_expr, end_expr, is_present)
+    }
+
+    /// Adds a cumulative constraint.
+    ///
+    /// The sum of demands for overlapping intervals must not exceed the capacity
+    /// at any point in time.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use cp_sat::builder::CpModelBuilder;
+    /// # use cp_sat::proto::CpSolverStatus;
+    /// let mut model = CpModelBuilder::default();
+    /// let s1 = model.new_int_var([(0, 10)]);
+    /// let s2 = model.new_int_var([(0, 10)]);
+    /// let i1 = model.new_fixed_size_interval_var(s1, 3);
+    /// let i2 = model.new_fixed_size_interval_var(s2, 3);
+    /// // Capacity 1 means intervals cannot overlap
+    /// model.add_cumulative([i1, i2], [1, 1], 1);
+    /// let response = model.solve();
+    /// assert_eq!(response.status(), CpSolverStatus::Optimal);
+    /// // With capacity 1, intervals must not overlap
+    /// let v1 = s1.solution_value(&response);
+    /// let v2 = s2.solution_value(&response);
+    /// assert!(v1 + 3 <= v2 || v2 + 3 <= v1);
+    /// ```
+    pub fn add_cumulative(
+        &mut self,
+        intervals: impl IntoIterator<Item = IntervalVar>,
+        demands: impl IntoIterator<Item = impl Into<LinearExpr>>,
+        capacity: impl Into<LinearExpr>,
+    ) -> Constraint {
+        self.add_cst(CstEnum::Cumulative(proto::CumulativeConstraintProto {
+            capacity: Some(capacity.into().into()),
+            intervals: intervals.into_iter().map(|i| i.0).collect(),
+            demands: demands.into_iter().map(|d| d.into().into()).collect(),
+        }))
+    }
+
+    /// Adds a no-overlap constraint.
+    ///
+    /// All intervals must be disjoint (non-overlapping). This is also known as
+    /// a disjunctive constraint in scheduling.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use cp_sat::builder::CpModelBuilder;
+    /// # use cp_sat::proto::CpSolverStatus;
+    /// let mut model = CpModelBuilder::default();
+    /// let s1 = model.new_int_var([(0, 10)]);
+    /// let s2 = model.new_int_var([(0, 10)]);
+    /// let s3 = model.new_int_var([(0, 10)]);
+    /// let i1 = model.new_fixed_size_interval_var(s1, 3);
+    /// let i2 = model.new_fixed_size_interval_var(s2, 3);
+    /// let i3 = model.new_fixed_size_interval_var(s3, 3);
+    /// model.add_no_overlap([i1, i2, i3]);
+    /// let response = model.solve();
+    /// assert_eq!(response.status(), CpSolverStatus::Optimal);
+    /// ```
+    pub fn add_no_overlap(
+        &mut self,
+        intervals: impl IntoIterator<Item = IntervalVar>,
+    ) -> Constraint {
+        self.add_cst(CstEnum::NoOverlap(proto::NoOverlapConstraintProto {
+            intervals: intervals.into_iter().map(|i| i.0).collect(),
+        }))
+    }
+
     fn add_cst(&mut self, cst: CstEnum) -> Constraint {
         let index = self.proto.constraints.len();
         self.proto.constraints.push(proto::ConstraintProto {
@@ -948,6 +1165,15 @@ impl IntVar {
 /// Constraint identifier.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Constraint(usize);
+
+/// Interval variable identifier.
+///
+/// An interval variable represents a time interval with a start, size, and end.
+/// The solver enforces that start + size == end.
+///
+/// Interval variables are used with scheduling constraints like cumulative and no_overlap.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IntervalVar(pub i32);
 
 /// A linear expression, used in several places in the
 /// [builder][CpModelBuilder].
