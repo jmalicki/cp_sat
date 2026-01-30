@@ -29,6 +29,11 @@ impl CpModelBuilder {
         &self.proto
     }
 
+    /// Sets the model name (for solver log output, e.g. "Presolved optimization model 'name'").
+    pub fn set_model_name(&mut self, name: impl Into<String>) {
+        self.proto.name = name.into();
+    }
+
     /// Creates a new boolean variable, and returns the [BoolVar]
     /// indentifier.
     ///
