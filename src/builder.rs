@@ -29,6 +29,14 @@ impl CpModelBuilder {
         &self.proto
     }
 
+    /// Returns a mutable reference to the underlying [proto::CpModelProto].
+    ///
+    /// Use this to access proto fields not yet wrapped by builder methods
+    /// (e.g. `search_strategy` for decision strategies).
+    pub fn proto_mut(&mut self) -> &mut proto::CpModelProto {
+        &mut self.proto
+    }
+
     /// Sets the model name (for solver log output, e.g. "Presolved optimization model 'name'").
     pub fn set_model_name(&mut self, name: impl Into<String>) {
         self.proto.name = name.into();
@@ -1078,6 +1086,12 @@ impl CpModelBuilder {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BoolVar(i32);
 impl BoolVar {
+    /// Returns the proto variable index for use with `DecisionStrategyProto` or
+    /// other proto-level APIs.
+    pub fn index(self) -> i32 {
+        self.0
+    }
+
     /// Gets the solution value of the variable from a solution.
     ///
     /// The solution must come from the same model as the variable,
@@ -1137,6 +1151,12 @@ impl From<BoolVar> for IntVar {
     }
 }
 impl IntVar {
+    /// Returns the proto variable index for use with `DecisionStrategyProto` or
+    /// other proto-level APIs.
+    pub fn index(self) -> i32 {
+        self.0
+    }
+
     /// Gets the solution value of the variable from a solution.
     ///
     /// The solution must come from the same model as the variable,
