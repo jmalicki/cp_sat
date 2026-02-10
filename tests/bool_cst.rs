@@ -23,3 +23,17 @@ fn not_feasible() {
     assert!(!y.solution_value(&response));
     assert!((!y).solution_value(&response));
 }
+
+#[test]
+fn implication_a_implies_b() {
+    // add_implication(a, b): when a is true, b must be true (a => b).
+    let mut model = CpModelBuilder::default();
+    let a = model.new_bool_var();
+    let b = model.new_bool_var();
+    model.add_implication(a, b);
+    model.add_and([a]); // force a true
+    let response = model.solve();
+    assert_eq!(response.status(), CpSolverStatus::Optimal);
+    assert!(a.solution_value(&response));
+    assert!(b.solution_value(&response));
+}
